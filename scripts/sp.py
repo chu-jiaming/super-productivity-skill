@@ -13,25 +13,58 @@ Usage:
   sp.py raw METHOD /path ['{"json": "body"}']
 
 The token is read from the app's data folder, so it never needs to be pasted anywhere.
+
+Environment overrides:
+  SP_API_URL     base URL (default http://127.0.0.1:3876)
+  SP_API_TOKEN   access token (skips the token file)
+  SP_TOKEN_FILE  path to the token file (if the data folder is somewhere unusual)
 """
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
-BASE = "http://127.0.0.1:3876"
-TOKEN_FILE = Path.home() / "Library/Application Support/superProductivity/local-rest-api-token"
+BASE = os.environ.get("SP_API_URL", "http://127.0.0.1:3876").rstrip("/")
+TOKEN_NAME = "local-rest-api-token"
 TODAY_TAG = "TODAY"
 
 
+def data_dirs():
+    """Candidate Super Productivity data folders (Electron userData) for this platform."""
+    home = Path.home()
+    if sys.platform == "darwin":
+        return [home / "Library/Application Support/superProductivity"]
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        return [Path(appdata) / "superProductivity"] if appdata else []
+    config = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+    return [
+        config / "superProductivity",
+        home / "snap/superproductivity/current/.config/superProductivity",
+        home / ".var/app/com.super_productivity.SuperProductivity/config/superProductivity",
+    ]
+
+
 def token():
-    try:
-        return TOKEN_FILE.read_text().strip()
-    except FileNotFoundError:
-        sys.exit(f"Token file not found at {TOKEN_FILE}. Enable 'local REST API' in Super Productivity settings.")
+    if os.environ.get("SP_API_TOKEN"):
+        return os.environ["SP_API_TOKEN"].strip()
+    if os.environ.get("SP_TOKEN_FILE"):
+        candidates = [Path(os.environ["SP_TOKEN_FILE"]).expanduser()]
+    else:
+        candidates = [d / TOKEN_NAME for d in data_dirs()]
+    for f in candidates:
+        if f.is_file():
+            return f.read_text().strip()
+    tried = "\n  ".join(str(c) for c in candidates) or "(none for this platform)"
+    sys.exit(
+        "Access token not found. Enable 'local REST API' in Super Productivity settings, "
+        "or set SP_API_TOKEN / SP_TOKEN_FILE.\nTried:\n  " + tried
+    )
 
 
 def call(method, path, body=None):
@@ -191,5 +224,7 @@ def main():
 
 
 if __name__ == "__main__":
-    import urllib.parse  # noqa: E402  (used by `tasks`)
+    # Task titles are often non-ASCII; don't let a legacy console encoding crash output.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     main()
